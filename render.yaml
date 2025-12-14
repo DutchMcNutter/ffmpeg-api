@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: ffmpeg-api
-    env: docker
-    dockerfilePath: ./Dockerfile
-    envVars:
-      - key: NODE_ENV
-        value: production
