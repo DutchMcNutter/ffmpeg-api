@@ -89,10 +89,10 @@ exports.handler = async (event) => {
     
     if (includeZoom) {
       // Add random zoom effect (zooms in and out every 10-15 seconds)
-      filterComplex = `[0:v]zoompan=z='if(lte(mod(time,12),6),min(1.5,1+(time-floor(time/12)*12)/6*0.5),max(1,1.5-(time-floor(time/12)*12-6)/6*0.5))':d=1:s=1080x1920:fps=30,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=28,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=80'[v]`;
-    } else {
-      filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=28,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=80'[v]`;
-    }
+      filterComplex = `[0:v]zoompan=z='if(lte(mod(time,6),3),min(1.25,1+(time-floor(time/6)*6)/3*0.25),max(1,1.25-(time-floor(time/6)*6-3)/3*0.25))':x='iw/2':y='ih/3':d=1:s=1080x1920:fps=30,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+} else {
+  filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+}
     
     const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac ${outputVideo}`;
     
