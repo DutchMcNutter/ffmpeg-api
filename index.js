@@ -3,8 +3,12 @@ const fs = require('fs').promises;
 const axios = require('axios');
 const FormData = require('form-data');
 const fsSync = require('fs');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const S3_BUCKET = 'ffmpeg-processed-videos-lance';
+const s3Client = new S3Client({ region: 'us-east-1' });
 
 // Lambda handler function
 exports.handler = async (event) => {
@@ -88,21 +92,41 @@ exports.handler = async (event) => {
     let filterComplex = '';
     
     if (includeZoom) {
-      // Add random zoom effect (zooms in and out every 10-15 seconds)
       filterComplex = `[0:v]zoompan=z='if(lte(mod(time,6),3),min(1.25,1+(time-floor(time/6)*6)/3*0.25),max(1,1.25-(time-floor(time/6)*6-3)/3*0.25))':x='iw/2':y='ih/3':d=1:s=1080x1920:fps=30,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
-} else {
-  filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
-}
+    } else {
+      filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+    }
     
     const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac ${outputVideo}`;
     
     await execPromise(ffmpegCommand);
     console.log('✅ Video processing complete');
     
-    // Read processed video and convert to base64
-    console.log('📤 Preparing response...');
+    // Upload to S3
+    console.log('☁️ Uploading to S3...');
     const videoBuffer = await fs.readFile(outputVideo);
-    const base64Video = videoBuffer.toString('base64');
+    const s3Key = `processed/${timestamp}.mp4`;
+    
+    const uploadCommand = new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      Body: videoBuffer,
+      ContentType: 'video/mp4'
+    });
+    
+    await s3Client.send(uploadCommand);
+    console.log('✅ Uploaded to S3');
+    
+    // Generate presigned download URL (valid for 1 hour)
+    console.log('🔗 Generating download URL...');
+    const downloadUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: s3Key
+      }),
+      { expiresIn: 3600 } // 1 hour
+    );
     
     // Cleanup temporary files
     console.log('🧹 Cleaning up temporary files...');
@@ -124,12 +148,14 @@ exports.handler = async (event) => {
       },
       body: JSON.stringify({
         success: true,
-        video: base64Video,
+        videoUrl: downloadUrl,
         metadata: {
           processingTimeSeconds: parseFloat(processingTime),
           videoSizeKB: Math.round(videoBuffer.length / 1024),
           captionsAdded: true,
-          zoomEffectApplied: includeZoom
+          zoomEffectApplied: includeZoom,
+          s3Key: s3Key,
+          expiresIn: '1 hour'
         }
       })
     };
