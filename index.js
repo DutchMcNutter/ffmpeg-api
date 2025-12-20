@@ -93,13 +93,12 @@ exports.handler = async (event) => {
     
     if (includeZoom) {
   // Submagic-style zoom: Quick zoom in (2s) → Hold (8s) → Quick zoom out (2s) → Hold (12s)
-  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,24),2), 1+(mod(time,24)/2)*0.15, if(lt(mod(time,24),10), 1.15, if(lt(mod(time,24),12), 1.15-((mod(time,24)-10)/2)*0.15, 1)))':x='iw/2':y='ih/4':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,24),2), 1+(mod(time,24)/2)*0.15, if(lt(mod(time,24),10), 1.15, if(lt(mod(time,24),12), 1.15-((mod(time,24)-10)/2)*0.15, 1)))':x='iw/2-(iw/zoom/2)':y='ih/4-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
 } else {
   filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
 }
 
-const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
-    
+const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;    
     await execPromise(ffmpegCommand);
     console.log('✅ Video processing complete');
     
