@@ -94,7 +94,7 @@ exports.handler = async (event) => {
 if (includeZoom) {
   // Dynamic zoom with variety: 1s in → 4s hold → 1s out → 4s normal (10s cycle)
   // 30s pattern: 0-10s center, 10-20s right, 20-30s left, then repeats
-  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),1), 1+(mod(time,10)/1)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),6), 1.15-((mod(time,10)-5)/1)*0.15, 1)))':x='if(lt(mod(time,30),10), iw/2-(iw/zoom/2), if(lt(mod(time,30),20), iw*0.65-(iw/zoom/2), iw*0.35-(iw/zoom/2)))':y='ih/4-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
+  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),1), 1+(mod(time,10)/1)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),6), 1.15-((mod(time,10)-5)/1)*0.15, 1)))':x='if(lt(mod(time,30),10), iw/2-(iw/zoom/2), if(lt(mod(time,30),20), iw*0.65-(iw/zoom/2), iw*0.35-(iw/zoom/2)))':y='ih/3-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
 } else {
   filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
 }
