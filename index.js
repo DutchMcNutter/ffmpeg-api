@@ -94,12 +94,12 @@ exports.handler = async (event) => {
 if (includeZoom) {
   // Dynamic zoom with variety: 1s in → 4s hold → 1s out → 4s normal (10s cycle)
   // Alternates between center, right, and left targets for visual variety
-  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),1), 1+(mod(time,10)/1)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),6), 1.15-((mod(time,10)-5)/1)*0.15, 1)))':x='if(eq(floor(time/10)%3,0), iw/2-(iw/zoom/2), if(eq(floor(time/10)%3,1), iw*0.65-(iw/zoom/2), iw*0.35-(iw/zoom/2)))':y='ih/4-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+  filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),1), 1+(mod(time,10)/1)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),6), 1.15-((mod(time,10)-5)/1)*0.15, 1)))':x='if(eq(floor(time/10)%3,0), iw/2-(iw/zoom/2), if(eq(floor(time/10)%3,1), iw*0.65-(iw/zoom/2), iw*0.35-(iw/zoom/2)))':y='ih/4-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
 } else {
-  filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=20,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55'[v]`;
+  filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
 }
 
-const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
+const ffmpegCommand = `ffmpeg -i ${inputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;    
     
     await execPromise(ffmpegCommand);
     console.log('✅ Video processing complete');
