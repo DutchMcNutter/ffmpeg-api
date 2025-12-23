@@ -104,10 +104,10 @@ exports.handler = async (event) => {
     let filterComplex;
 
     if (includeZoom) {
-      // Dynamic zoom with variety: 0.5s in → 4.5s hold → 0.5s out → 4.5s normal (10s cycle)
-      // 30s pattern: 0-10s center, 10-20s right, 20-30s left, then repeats
-      // Horizontal positioning targets eyes (60%/40%) instead of ears (65%/35%)
-      filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),0.5), 1+(mod(time,10)/0.5)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),5.5), 1.15-((mod(time,10)-5)/0.5)*0.15, 1)))':x='if(lt(mod(time,30),10), iw/2-(iw/zoom/2), if(lt(mod(time,30),20), iw*0.60-(iw/zoom/2), iw*0.40-(iw/zoom/2)))':y='ih/3-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
+      // Dynamic zoom with variety: 0.3s in → 4.7s hold → 0.3s out → 4.7s normal (10s cycle)
+      // 30s pattern: 0-10s center, 10-20s right (55%), 20-30s left (45%), then repeats
+      // Horizontal positioning targets eyes at 55%/45%
+      filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),0.3), 1+(mod(time,10)/0.3)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),5.3), 1.15-((mod(time,10)-5)/0.3)*0.15, 1)))':x='if(lt(mod(time,30),10), iw/2-(iw/zoom/2), if(lt(mod(time,30),20), iw*0.55-(iw/zoom/2), iw*0.45-(iw/zoom/2)))':y='ih/3-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
     } else {
       filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
     }
@@ -324,10 +324,10 @@ async function stitchSegments(segments, outputPath, tmpDir) {
   const concatContent = segmentFiles.map(file => `file '${file}'`).join('\n');
   fs.writeFileSync(concatFile, concatContent);
 
-  console.log('Concatenating segments...');
-  // Use concat demuxer for fast concatenation
+  console.log('Concatenating segments with re-encoding...');
+  // Re-encode instead of copy to prevent freezing issues
   execSync(
-    `ffmpeg -f concat -safe 0 -i ${concatFile} -c copy ${outputPath} -y`,
+    `ffmpeg -f concat -safe 0 -i ${concatFile} -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k ${outputPath} -y`,
     { stdio: 'inherit' }
   );
 
