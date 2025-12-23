@@ -1,4 +1,5 @@
-const { S3 } = require('@aws-sdk/client-s3');
+const { S3, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -129,8 +130,13 @@ exports.handler = async (event) => {
       ContentType: 'video/mp4',
     });
 
-    const s3Url = `https://${OUTPUT_BUCKET}.s3.amazonaws.com/${outputKey}`;
-    console.log('Upload successful:', s3Url);
+    // Generate pre-signed URL (valid for 24 hours)
+    const command = new GetObjectCommand({
+      Bucket: OUTPUT_BUCKET,
+      Key: outputKey,
+    });
+    const s3Url = await getSignedUrl(s3, command, { expiresIn: 86400 }); // 24 hours
+    console.log('Upload successful, generated pre-signed URL');
 
     // Cleanup
     console.log('Cleaning up temporary files...');
