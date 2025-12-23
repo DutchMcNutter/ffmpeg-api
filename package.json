@@ -1,18 +1,11 @@
 {
   "name": "ffmpeg-lambda",
   "version": "1.0.0",
-  "description": "FFmpeg Lambda for video captioning with Whisper",
+  "description": "FFmpeg video processing Lambda function",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"No tests configured\""
-  },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.450.0",
     "axios": "^1.6.0",
-    "form-data": "^4.0.0",
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/s3-request-presigner": "^3.0.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "form-data": "^4.0.0"
   }
 }
