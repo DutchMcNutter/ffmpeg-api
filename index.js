@@ -12,7 +12,17 @@ const BROLL_BUCKET = 'ffmpeg-broll-library'; // NEW: B-roll library bucket
 exports.handler = async (event) => {
   console.log('Event received:', JSON.stringify(event));
 
-  const { videoUrl, includeZoom = true, brollCount = 0 } = event; // NEW: brollCount parameter
+  // Parse body if it's a Lambda Function URL request
+  let params = event;
+  if (event.body) {
+    try {
+      params = JSON.parse(event.body);
+    } catch (e) {
+      params = event;
+    }
+  }
+
+  const { videoUrl, includeZoom = true, brollCount = 0 } = params; // NEW: brollCount parameter
 
   if (!videoUrl) {
     return {
