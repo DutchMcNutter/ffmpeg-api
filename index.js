@@ -222,7 +222,7 @@ function calculateInsertionPoints(totalDuration, count) {
   return points;
 }
 
-// Apply B-roll overlays using FFmpeg overlay filter (FIXED SYNTAX)
+// Apply B-roll overlays using FFmpeg overlay filter (FIXED TIMING)
 async function applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDir) {
   const maxBrollDuration = 4;
   
@@ -232,12 +232,14 @@ async function applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDi
     inputs.push(broll.localPath);
   }
   
-  // Build filter_complex with correct syntax
+  // Build filter_complex with correct syntax AND timing
   let filterParts = [];
   
-  // Scale all B-roll clips first
+  // Scale and trim B-roll clips, reset PTS to start at 0
   for (let i = 0; i < brollClips.length; i++) {
-    filterParts.push(`[${i+1}:v]scale=720:1280[b${i}]`);
+    const duration = Math.min(brollClips[i].duration, maxBrollDuration);
+    // Trim to duration, scale, and reset PTS so video plays from start
+    filterParts.push(`[${i+1}:v]trim=duration=${duration},scale=720:1280,setpts=PTS-STARTPTS[b${i}]`);
   }
   
   // Chain overlays: main video + first overlay -> tmp0 -> tmp1 -> etc
@@ -248,7 +250,8 @@ async function applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDi
     const endTime = insertAt + duration;
     
     const outputLabel = (i === brollClips.length - 1) ? '[vout]' : `[tmp${i}]`;
-    filterParts.push(`${currentInput}[b${i}]overlay=0:0:enable='between(t,${insertAt},${endTime})'${outputLabel}`);
+    // Use enable to control when B-roll is visible
+    filterParts.push(`${currentInput}[b${i}]overlay=0:0:enable='between(t,${insertAt},${endTime})':shortest=0${outputLabel}`);
     
     currentInput = `[tmp${i}]`;
   }
