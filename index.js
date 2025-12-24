@@ -222,56 +222,52 @@ function calculateInsertionPoints(totalDuration, count) {
   return points;
 }
 
-// Apply B-roll overlays using FFmpeg overlay filter (SIMPLE & RELIABLE)
+// Apply B-roll overlays using FFmpeg overlay filter (FIXED SYNTAX)
 async function applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDir) {
   const maxBrollDuration = 4;
   
-  // Build filter chain for overlays
-  let filterChain = '[0:v]';
-  const inputs = ['-i', inputVideo];
-  
-  for (let i = 0; i < brollClips.length; i++) {
-    const broll = brollClips[i];
-    const insertAt = insertionPoints[i];
-    const duration = Math.min(broll.duration, maxBrollDuration);
-    
-    inputs.push('-i', broll.localPath);
-    
-    // Scale B-roll to 720x1280, then overlay at specific time
-    const overlayFilter = `[${i+1}:v]scale=720:1280,setpts=PTS-STARTPTS+${insertAt}/TB[b${i}];`;
-    filterChain = overlayFilter + filterChain;
-    
-    // Apply overlay with enable condition (show only during specific time window)
-    filterChain += `[b${i}]overlay=0:0:enable='between(t,${insertAt},${insertAt + duration})'`;
-    
-    if (i < brollClips.length - 1) {
-      filterChain += `[tmp${i}];[tmp${i}]`;
-    }
+  // Build inputs array
+  const inputs = [inputVideo];
+  for (const broll of brollClips) {
+    inputs.push(broll.localPath);
   }
   
-  filterChain += '[vout]';
+  // Build filter_complex with correct syntax
+  let filterParts = [];
+  
+  // Scale all B-roll clips first
+  for (let i = 0; i < brollClips.length; i++) {
+    filterParts.push(`[${i+1}:v]scale=720:1280[b${i}]`);
+  }
+  
+  // Chain overlays: main video + first overlay -> tmp0 -> tmp1 -> etc
+  let currentInput = '[0:v]';
+  for (let i = 0; i < brollClips.length; i++) {
+    const insertAt = insertionPoints[i];
+    const duration = Math.min(brollClips[i].duration, maxBrollDuration);
+    const endTime = insertAt + duration;
+    
+    const outputLabel = (i === brollClips.length - 1) ? '[vout]' : `[tmp${i}]`;
+    filterParts.push(`${currentInput}[b${i}]overlay=0:0:enable='between(t,${insertAt},${endTime})'${outputLabel}`);
+    
+    currentInput = `[tmp${i}]`;
+  }
+  
+  const filterComplex = filterParts.join(';');
   
   const outputPath = path.join(tmpDir, 'video_with_broll.mp4');
   
-  console.log('Applying overlays with filter:', filterChain);
+  console.log('Filter complex:', filterComplex);
   
-  // Build complete FFmpeg command
-  const ffmpegCmd = [
-    'ffmpeg',
-    ...inputs,
-    '-filter_complex', filterChain,
-    '-map', '[vout]',
-    '-map', '0:a',
-    '-c:v', 'libx264',
-    '-preset', 'fast',
-    '-crf', '23',
-    '-c:a', 'copy',
-    outputPath,
-    '-y'
-  ].join(' ');
+  // Build FFmpeg command with proper input ordering
+  let cmd = 'ffmpeg';
+  inputs.forEach(input => {
+    cmd += ` -i ${input}`;
+  });
+  cmd += ` -filter_complex "${filterComplex}" -map "[vout]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputPath} -y`;
   
   console.log('Running overlay command...');
-  execSync(ffmpegCmd, { stdio: 'inherit' });
+  execSync(cmd, { stdio: 'inherit' });
   
   return outputPath;
 }
