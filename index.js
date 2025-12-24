@@ -9,7 +9,7 @@ const path = require('path');
 const s3 = new S3({ region: 'us-east-1' });
 
 const OUTPUT_BUCKET = 'ffmpeg-processed-videos-lance';
-const BROLL_BUCKET = 'ffmpeg-broll-library'; // NEW: B-roll library bucket
+const BROLL_BUCKET = 'ffmpeg-broll-library';
 
 exports.handler = async (event) => {
   console.log('Event received:', JSON.stringify(event));
@@ -24,7 +24,7 @@ exports.handler = async (event) => {
     }
   }
 
-  const { videoUrl, includeZoom = true, brollCount = 0 } = params; // NEW: brollCount parameter
+  const { videoUrl, includeZoom = true, brollCount = 0 } = params;
 
   if (!videoUrl) {
     return {
@@ -71,32 +71,49 @@ exports.handler = async (event) => {
     console.log('Creating SRT file...');
     createSRTFile(transcription, srtFile);
 
-    // NEW: Step 5: Handle B-roll if requested
-    let finalInputVideo = inputVideo;
+    // Step 5: Handle B-roll if requested
+    let videoForCaptions = inputVideo;
     
     if (brollCount > 0) {
       console.log(`Processing with ${brollCount} B-roll clips...`);
       const videoDuration = getVideoDuration(inputVideo);
       console.log(`Avatar video duration: ${videoDuration}s`);
       
+      // Extract original audio
+      const originalAudio = path.join(tmpDir, 'original_audio.aac');
+      execSync(`ffmpeg -i ${inputVideo} -vn -c:a copy ${originalAudio} -y`, { stdio: 'inherit' });
+      console.log('Extracted original audio');
+      
       // Get random B-roll clips
       const brollClips = await getRandomBrollClips(brollCount, tmpDir);
       console.log(`Downloaded ${brollClips.length} B-roll clips`);
       
-      // Calculate insertion points (evenly distributed)
+      // Calculate where to insert B-roll (in original timeline)
       const insertionPoints = calculateInsertionPoints(videoDuration, brollCount);
       console.log('B-roll insertion points:', insertionPoints);
       
-      // Build segments (avatar + broll alternating)
-      const segments = buildSegments(inputVideo, brollClips, insertionPoints, videoDuration);
-      console.log(`Created ${segments.length} segments`);
+      // Build video segments (B-roll REPLACES avatar at those points)
+      const videoSegments = await buildAndExtractVideoSegments(
+        inputVideo,
+        brollClips,
+        insertionPoints,
+        videoDuration,
+        tmpDir
+      );
+      console.log(`Created ${videoSegments.length} video segment files`);
       
-      // Stitch segments together
-      const stitchedVideo = path.join(tmpDir, 'stitched.mp4');
-      await stitchSegments(segments, stitchedVideo, tmpDir);
-      console.log('Segments stitched successfully');
+      // Stitch video segments (video-only)
+      const stitchedVideoOnly = path.join(tmpDir, 'stitched_video.mp4');
+      await stitchVideoSegments(videoSegments, stitchedVideoOnly, tmpDir);
+      console.log('Video segments stitched');
       
-      finalInputVideo = stitchedVideo;
+      // Add original audio back
+      videoForCaptions = path.join(tmpDir, 'video_with_audio.mp4');
+      execSync(
+        `ffmpeg -i ${stitchedVideoOnly} -i ${originalAudio} -c:v copy -c:a aac -b:a 128k -shortest ${videoForCaptions} -y`,
+        { stdio: 'inherit' }
+      );
+      console.log('Added original audio - duration maintained');
     }
 
     // Step 6: Add captions and zoom to final video
@@ -104,15 +121,14 @@ exports.handler = async (event) => {
     let filterComplex;
 
     if (includeZoom) {
-      // Dynamic zoom with variety: 0.3s in → 4.7s hold → 0.3s out → 4.7s normal (10s cycle)
-      // 30s pattern: 0-10s center, 10-20s right (55%), 20-30s left (45%), then repeats
-      // Horizontal positioning targets eyes at 55%/45%
+      // Dynamic zoom: 0.3s in → 4.7s hold → 0.3s out → 4.7s normal (10s cycle)
+      // Horizontal: 55% right / 45% left
       filterComplex = `[0:v]zoompan=z='if(lt(mod(time,10),0.3), 1+(mod(time,10)/0.3)*0.15, if(lt(mod(time,10),5), 1.15, if(lt(mod(time,10),5.3), 1.15-((mod(time,10)-5)/0.3)*0.15, 1)))':x='if(lt(mod(time,30),10), iw/2-(iw/zoom/2), if(lt(mod(time,30),20), iw*0.55-(iw/zoom/2), iw*0.45-(iw/zoom/2)))':y='ih/3-(ih/zoom/2)':d=1:s=720x1280,subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
     } else {
       filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
     }
 
-    const ffmpegCommand = `ffmpeg -i ${finalInputVideo} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
+    const ffmpegCommand = `ffmpeg -i ${videoForCaptions} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
     
     console.log('Running FFmpeg command...');
     execSync(ffmpegCommand, { stdio: 'inherit' });
@@ -135,7 +151,7 @@ exports.handler = async (event) => {
       Bucket: OUTPUT_BUCKET,
       Key: outputKey,
     });
-    const s3Url = await getSignedUrl(s3, command, { expiresIn: 86400 }); // 24 hours
+    const s3Url = await getSignedUrl(s3, command, { expiresIn: 86400 });
     console.log('Upload successful, generated pre-signed URL');
 
     // Cleanup
@@ -144,11 +160,13 @@ exports.handler = async (event) => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     });
 
-    // NEW: Cleanup B-roll clips and segments
+    // Cleanup B-roll files
     if (brollCount > 0) {
       const tmpFiles = fs.readdirSync(tmpDir);
       tmpFiles.forEach(file => {
-        if (file.startsWith('broll_') || file.startsWith('segment_') || file === 'stitched.mp4' || file === 'concat.txt') {
+        if (file.startsWith('broll_') || file.startsWith('segment_') || 
+            file.startsWith('stitched_') || file.startsWith('original_') ||
+            file.startsWith('video_with_') || file === 'concat.txt') {
           const filePath = path.join(tmpDir, file);
           if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         }
@@ -168,11 +186,10 @@ exports.handler = async (event) => {
   }
 };
 
-// NEW: Get random B-roll clips from S3
+// Get random B-roll clips from S3
 async function getRandomBrollClips(count, tmpDir) {
   console.log(`Fetching random ${count} clips from ${BROLL_BUCKET}...`);
   
-  // List all objects in B-roll bucket
   const listResponse = await s3.listObjectsV2({
     Bucket: BROLL_BUCKET,
   });
@@ -181,18 +198,15 @@ async function getRandomBrollClips(count, tmpDir) {
     throw new Error('No B-roll clips found in S3 bucket');
   }
 
-  // Filter for video files only
   const videoFiles = listResponse.Contents.filter(obj => 
     obj.Key.endsWith('.mp4') || obj.Key.endsWith('.mov')
   );
 
   console.log(`Found ${videoFiles.length} video files in B-roll library`);
 
-  // Shuffle and select random clips
   const shuffled = videoFiles.sort(() => 0.5 - Math.random());
   const selected = shuffled.slice(0, Math.min(count, videoFiles.length));
 
-  // Download selected clips
   const clips = [];
   for (let i = 0; i < selected.length; i++) {
     const s3Object = selected[i];
@@ -205,7 +219,6 @@ async function getRandomBrollClips(count, tmpDir) {
       Key: s3Object.Key,
     });
 
-    // Convert stream to buffer and write to file
     const chunks = [];
     for await (const chunk of getResponse.Body) {
       chunks.push(chunk);
@@ -225,14 +238,11 @@ async function getRandomBrollClips(count, tmpDir) {
   return clips;
 }
 
-// NEW: Calculate where to insert B-roll clips
+// Calculate where to insert B-roll in the timeline
 function calculateInsertionPoints(totalDuration, count) {
   const points = [];
-  
-  // Distribute evenly: at 25%, 50%, 75% for count=3
-  // Avoid first 3 seconds (intro) and last 3 seconds (CTA)
-  const startBuffer = 3;
-  const endBuffer = 3;
+  const startBuffer = 3; // Avoid first 3 seconds
+  const endBuffer = 3;   // Avoid last 3 seconds
   const usableDuration = totalDuration - startBuffer - endBuffer;
   
   const interval = usableDuration / (count + 1);
@@ -245,93 +255,71 @@ function calculateInsertionPoints(totalDuration, count) {
   return points;
 }
 
-// NEW: Build video segments (avatar chunks + broll chunks)
-function buildSegments(avatarVideo, brollClips, insertionPoints, totalDuration) {
-  const segments = [];
+// Build and extract video segments (B-roll REPLACES avatar portions)
+async function buildAndExtractVideoSegments(avatarVideo, brollClips, insertionPoints, totalDuration, tmpDir) {
+  const segmentFiles = [];
+  const maxBrollDuration = 4; // Each B-roll clip max 4 seconds
+  
   let currentTime = 0;
-  const maxBrollDuration = 4; // Cap B-roll at 4 seconds each
-
+  
   for (let i = 0; i < insertionPoints.length; i++) {
     const insertAt = insertionPoints[i];
     const broll = brollClips[i];
-
-    // Avatar segment before B-roll
-    if (insertAt > currentTime) {
-      segments.push({
-        type: 'avatar',
-        input: avatarVideo,
-        start: currentTime,
-        duration: insertAt - currentTime,
-      });
-    }
-
-    // B-roll segment (capped at 4 seconds)
     const brollDuration = Math.min(broll.duration, maxBrollDuration);
-    segments.push({
-      type: 'broll',
-      input: broll.localPath,
-      start: 0,
-      duration: brollDuration,
-    });
-
+    
+    // Avatar segment BEFORE B-roll (video-only)
+    const avatarDuration = insertAt - currentTime;
+    if (avatarDuration > 0) {
+      const segPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
+      console.log(`Extract avatar: ${currentTime}s to ${insertAt}s (${avatarDuration}s)`);
+      execSync(
+        `ffmpeg -ss ${currentTime} -i ${avatarVideo} -t ${avatarDuration} -an -c:v libx264 -preset ultrafast -crf 23 ${segPath} -y`,
+        { stdio: 'inherit' }
+      );
+      segmentFiles.push(segPath);
+    }
+    
+    // B-roll segment (video-only, replaces avatar)
+    const brollPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
+    console.log(`B-roll ${i}: ${brollDuration}s (replaces avatar ${insertAt}s-${insertAt + brollDuration}s)`);
+    execSync(
+      `ffmpeg -i ${broll.localPath} -t ${brollDuration} -an -c:v libx264 -preset ultrafast -crf 23 -s 720x1280 ${brollPath} -y`,
+      { stdio: 'inherit' }
+    );
+    segmentFiles.push(brollPath);
+    
+    // Advance timeline by B-roll duration (skip that portion of avatar)
     currentTime = insertAt + brollDuration;
   }
-
-  // Final avatar segment after last B-roll
-  if (currentTime < totalDuration) {
-    segments.push({
-      type: 'avatar',
-      input: avatarVideo,
-      start: currentTime,
-      duration: totalDuration - currentTime,
-    });
+  
+  // Final avatar segment AFTER last B-roll (video-only)
+  const remainingDuration = totalDuration - currentTime;
+  if (remainingDuration > 0) {
+    const segPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
+    console.log(`Extract final avatar: ${currentTime}s to end (${remainingDuration}s)`);
+    execSync(
+      `ffmpeg -ss ${currentTime} -i ${avatarVideo} -t ${remainingDuration} -an -c:v libx264 -preset ultrafast -crf 23 ${segPath} -y`,
+      { stdio: 'inherit' }
+    );
+    segmentFiles.push(segPath);
   }
-
-  return segments;
+  
+  return segmentFiles;
 }
 
-// NEW: Stitch all segments together
-async function stitchSegments(segments, outputPath, tmpDir) {
-  console.log('Extracting and preparing segments...');
-  
-  // Extract each segment as a separate file
-  const segmentFiles = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    const segmentPath = path.join(tmpDir, `segment_${i}.mp4`);
-
-    if (seg.type === 'avatar') {
-      // Extract avatar segment with timestamp
-      console.log(`Extracting avatar segment ${i}: ${seg.start}s for ${seg.duration}s`);
-      execSync(
-        `ffmpeg -i ${seg.input} -ss ${seg.start} -t ${seg.duration} -c:v libx264 -preset ultrafast -crf 23 -c:a aac ${segmentPath} -y`,
-        { stdio: 'inherit' }
-      );
-    } else {
-      // Use B-roll clip (trim if needed)
-      console.log(`Preparing B-roll segment ${i}: ${seg.duration}s`);
-      execSync(
-        `ffmpeg -i ${seg.input} -t ${seg.duration} -c:v libx264 -preset ultrafast -crf 23 -c:a aac ${segmentPath} -y`,
-        { stdio: 'inherit' }
-      );
-    }
-
-    segmentFiles.push(segmentPath);
-  }
-
-  // Create concat file
+// Stitch video-only segments
+async function stitchVideoSegments(segmentFiles, outputPath, tmpDir) {
   const concatFile = path.join(tmpDir, 'concat.txt');
   const concatContent = segmentFiles.map(file => `file '${file}'`).join('\n');
   fs.writeFileSync(concatFile, concatContent);
 
-  console.log('Concatenating segments with re-encoding...');
-  // Re-encode instead of copy to prevent freezing issues
+  console.log('Concatenating video segments...');
   execSync(
-    `ffmpeg -f concat -safe 0 -i ${concatFile} -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k ${outputPath} -y`,
+    `ffmpeg -f concat -safe 0 -i ${concatFile} -c:v libx264 -preset fast -crf 23 ${outputPath} -y`,
     { stdio: 'inherit' }
   );
-
-  console.log('Stitching complete');
+  
+  console.log('Video stitching complete');
 }
 
 // Get video duration in seconds
