@@ -71,49 +71,25 @@ exports.handler = async (event) => {
     console.log('Creating SRT file...');
     createSRTFile(transcription, srtFile);
 
-    // Step 5: Handle B-roll if requested
-    let videoForCaptions = inputVideo;
+    // Step 5: Handle B-roll if requested (SIMPLE OVERLAY APPROACH)
+    let videoForProcessing = inputVideo;
     
     if (brollCount > 0) {
-      console.log(`Processing with ${brollCount} B-roll clips...`);
+      console.log(`Adding ${brollCount} B-roll overlays...`);
       const videoDuration = getVideoDuration(inputVideo);
       console.log(`Avatar video duration: ${videoDuration}s`);
-      
-      // Extract original audio
-      const originalAudio = path.join(tmpDir, 'original_audio.aac');
-      execSync(`ffmpeg -i ${inputVideo} -vn -c:a copy ${originalAudio} -y`, { stdio: 'inherit' });
-      console.log('Extracted original audio');
       
       // Get random B-roll clips
       const brollClips = await getRandomBrollClips(brollCount, tmpDir);
       console.log(`Downloaded ${brollClips.length} B-roll clips`);
       
-      // Calculate where to insert B-roll (in original timeline)
+      // Calculate where to show B-roll
       const insertionPoints = calculateInsertionPoints(videoDuration, brollCount);
-      console.log('B-roll insertion points:', insertionPoints);
+      console.log('B-roll overlay points:', insertionPoints);
       
-      // Build video segments (B-roll REPLACES avatar at those points)
-      const videoSegments = await buildAndExtractVideoSegments(
-        inputVideo,
-        brollClips,
-        insertionPoints,
-        videoDuration,
-        tmpDir
-      );
-      console.log(`Created ${videoSegments.length} video segment files`);
-      
-      // Stitch video segments (video-only)
-      const stitchedVideoOnly = path.join(tmpDir, 'stitched_video.mp4');
-      await stitchVideoSegments(videoSegments, stitchedVideoOnly, tmpDir);
-      console.log('Video segments stitched');
-      
-      // Add original audio back
-      videoForCaptions = path.join(tmpDir, 'video_with_audio.mp4');
-      execSync(
-        `ffmpeg -i ${stitchedVideoOnly} -i ${originalAudio} -c:v copy -c:a aac -b:a 128k -shortest ${videoForCaptions} -y`,
-        { stdio: 'inherit' }
-      );
-      console.log('Added original audio - duration maintained');
+      // Apply B-roll overlays using FFmpeg overlay filter
+      videoForProcessing = await applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDir);
+      console.log('B-roll overlays applied successfully');
     }
 
     // Step 6: Add captions and zoom to final video
@@ -128,7 +104,7 @@ exports.handler = async (event) => {
       filterComplex = `[0:v]subtitles=${srtFile}:force_style='FontName=Arial Bold,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=3,Bold=1,Alignment=2,MarginV=55,MarginL=40,MarginR=40'[v]`;
     }
 
-    const ffmpegCommand = `ffmpeg -i ${videoForCaptions} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
+    const ffmpegCommand = `ffmpeg -i ${videoForProcessing} -filter_complex "${filterComplex}" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a copy ${outputVideo}`;
     
     console.log('Running FFmpeg command...');
     execSync(ffmpegCommand, { stdio: 'inherit' });
@@ -156,22 +132,13 @@ exports.handler = async (event) => {
 
     // Cleanup
     console.log('Cleaning up temporary files...');
-    [inputVideo, outputVideo, audioFile, srtFile].forEach((file) => {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
+    const tmpFiles = fs.readdirSync(tmpDir);
+    tmpFiles.forEach(file => {
+      const filePath = path.join(tmpDir, file);
+      if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+      }
     });
-
-    // Cleanup B-roll files
-    if (brollCount > 0) {
-      const tmpFiles = fs.readdirSync(tmpDir);
-      tmpFiles.forEach(file => {
-        if (file.startsWith('broll_') || file.startsWith('segment_') || 
-            file.startsWith('stitched_') || file.startsWith('original_') ||
-            file.startsWith('video_with_') || file === 'concat.txt') {
-          const filePath = path.join(tmpDir, file);
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        }
-      });
-    }
 
     return {
       statusCode: 200,
@@ -238,11 +205,11 @@ async function getRandomBrollClips(count, tmpDir) {
   return clips;
 }
 
-// Calculate where to insert B-roll in the timeline
+// Calculate where to show B-roll
 function calculateInsertionPoints(totalDuration, count) {
   const points = [];
-  const startBuffer = 3; // Avoid first 3 seconds
-  const endBuffer = 3;   // Avoid last 3 seconds
+  const startBuffer = 3;
+  const endBuffer = 3;
   const usableDuration = totalDuration - startBuffer - endBuffer;
   
   const interval = usableDuration / (count + 1);
@@ -255,71 +222,58 @@ function calculateInsertionPoints(totalDuration, count) {
   return points;
 }
 
-// Build and extract video segments (B-roll REPLACES avatar portions)
-async function buildAndExtractVideoSegments(avatarVideo, brollClips, insertionPoints, totalDuration, tmpDir) {
-  const segmentFiles = [];
-  const maxBrollDuration = 4; // Each B-roll clip max 4 seconds
+// Apply B-roll overlays using FFmpeg overlay filter (SIMPLE & RELIABLE)
+async function applyBrollOverlays(inputVideo, brollClips, insertionPoints, tmpDir) {
+  const maxBrollDuration = 4;
   
-  let currentTime = 0;
+  // Build filter chain for overlays
+  let filterChain = '[0:v]';
+  const inputs = ['-i', inputVideo];
   
-  for (let i = 0; i < insertionPoints.length; i++) {
-    const insertAt = insertionPoints[i];
+  for (let i = 0; i < brollClips.length; i++) {
     const broll = brollClips[i];
-    const brollDuration = Math.min(broll.duration, maxBrollDuration);
+    const insertAt = insertionPoints[i];
+    const duration = Math.min(broll.duration, maxBrollDuration);
     
-    // Avatar segment BEFORE B-roll (video-only)
-    const avatarDuration = insertAt - currentTime;
-    if (avatarDuration > 0) {
-      const segPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
-      console.log(`Extract avatar: ${currentTime}s to ${insertAt}s (${avatarDuration}s)`);
-      execSync(
-        `ffmpeg -ss ${currentTime} -i ${avatarVideo} -t ${avatarDuration} -an -c:v libx264 -preset ultrafast -crf 23 ${segPath} -y`,
-        { stdio: 'inherit' }
-      );
-      segmentFiles.push(segPath);
+    inputs.push('-i', broll.localPath);
+    
+    // Scale B-roll to 720x1280, then overlay at specific time
+    const overlayFilter = `[${i+1}:v]scale=720:1280,setpts=PTS-STARTPTS+${insertAt}/TB[b${i}];`;
+    filterChain = overlayFilter + filterChain;
+    
+    // Apply overlay with enable condition (show only during specific time window)
+    filterChain += `[b${i}]overlay=0:0:enable='between(t,${insertAt},${insertAt + duration})'`;
+    
+    if (i < brollClips.length - 1) {
+      filterChain += `[tmp${i}];[tmp${i}]`;
     }
-    
-    // B-roll segment (video-only, replaces avatar)
-    const brollPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
-    console.log(`B-roll ${i}: ${brollDuration}s (replaces avatar ${insertAt}s-${insertAt + brollDuration}s)`);
-    execSync(
-      `ffmpeg -i ${broll.localPath} -t ${brollDuration} -an -c:v libx264 -preset ultrafast -crf 23 -s 720x1280 ${brollPath} -y`,
-      { stdio: 'inherit' }
-    );
-    segmentFiles.push(brollPath);
-    
-    // Advance timeline by B-roll duration (skip that portion of avatar)
-    currentTime = insertAt + brollDuration;
   }
   
-  // Final avatar segment AFTER last B-roll (video-only)
-  const remainingDuration = totalDuration - currentTime;
-  if (remainingDuration > 0) {
-    const segPath = path.join(tmpDir, `segment_${segmentFiles.length}.mp4`);
-    console.log(`Extract final avatar: ${currentTime}s to end (${remainingDuration}s)`);
-    execSync(
-      `ffmpeg -ss ${currentTime} -i ${avatarVideo} -t ${remainingDuration} -an -c:v libx264 -preset ultrafast -crf 23 ${segPath} -y`,
-      { stdio: 'inherit' }
-    );
-    segmentFiles.push(segPath);
-  }
+  filterChain += '[vout]';
   
-  return segmentFiles;
-}
-
-// Stitch video-only segments
-async function stitchVideoSegments(segmentFiles, outputPath, tmpDir) {
-  const concatFile = path.join(tmpDir, 'concat.txt');
-  const concatContent = segmentFiles.map(file => `file '${file}'`).join('\n');
-  fs.writeFileSync(concatFile, concatContent);
-
-  console.log('Concatenating video segments...');
-  execSync(
-    `ffmpeg -f concat -safe 0 -i ${concatFile} -c:v libx264 -preset fast -crf 23 ${outputPath} -y`,
-    { stdio: 'inherit' }
-  );
+  const outputPath = path.join(tmpDir, 'video_with_broll.mp4');
   
-  console.log('Video stitching complete');
+  console.log('Applying overlays with filter:', filterChain);
+  
+  // Build complete FFmpeg command
+  const ffmpegCmd = [
+    'ffmpeg',
+    ...inputs,
+    '-filter_complex', filterChain,
+    '-map', '[vout]',
+    '-map', '0:a',
+    '-c:v', 'libx264',
+    '-preset', 'fast',
+    '-crf', '23',
+    '-c:a', 'copy',
+    outputPath,
+    '-y'
+  ].join(' ');
+  
+  console.log('Running overlay command...');
+  execSync(ffmpegCmd, { stdio: 'inherit' });
+  
+  return outputPath;
 }
 
 // Get video duration in seconds
